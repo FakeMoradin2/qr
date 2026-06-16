@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabase'
+import { optimizePdf } from '../lib/optimizePdf'
 import { uploadPdf } from '../lib/uploadPdf'
 
 export type UploadStatus = 'idle' | 'uploading' | 'ready' | 'error'
@@ -22,28 +23,33 @@ export function usePdfUpload(pdfFile: File | null) {
     setPublicUrl(null)
     setError(null)
 
-    uploadPdf(file, {
-      signal: controller.signal,
-      onProgress: (value) => {
-        if (uploadId === uploadIdRef.current) {
-          setProgress(value)
-        }
-      },
-    })
-      .then((url) => {
+    ;(async () => {
+      try {
+        const optimized = await optimizePdf(file)
+        if (uploadId !== uploadIdRef.current) return
+
+        const url = await uploadPdf(optimized, {
+          signal: controller.signal,
+          onProgress: (value) => {
+            if (uploadId === uploadIdRef.current) {
+              setProgress(value)
+            }
+          },
+        })
+
         if (uploadId === uploadIdRef.current) {
           setPublicUrl(url)
           setStatus('ready')
           setProgress(100)
         }
-      })
-      .catch((err) => {
+      } catch (err) {
         if (uploadId !== uploadIdRef.current) return
         if (err instanceof DOMException && err.name === 'AbortError') return
 
         setError(err instanceof Error ? err.message : 'No se pudo subir el PDF.')
         setStatus('error')
-      })
+      }
+    })()
 
     return () => controller.abort()
   }, [])
