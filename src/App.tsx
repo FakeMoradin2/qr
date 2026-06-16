@@ -1,86 +1,68 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import QRCode from 'qrcode'
+import { PdfPreview } from './components/PdfPreview'
+import { UploadProgress } from './components/UploadProgress'
+import { usePdfUpload } from './hooks/usePdfUpload'
 import { isSupabaseConfigured } from './lib/supabase'
-import { uploadPdf } from './lib/uploadPdf'
 
 function App() {
   const [pdfFile, setPdfFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
-  const [publicUrl, setPublicUrl] = useState<string | null>(null)
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
-  const [isGenerating, setIsGenerating] = useState(false)
+  const [isGeneratingQr, setIsGeneratingQr] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  useEffect(() => {
-    if (!pdfFile) {
-      setPreviewUrl(null)
-      return
-    }
-
-    const url = URL.createObjectURL(pdfFile)
-    setPreviewUrl(url)
-
-    return () => {
-      URL.revokeObjectURL(url)
-    }
-  }, [pdfFile])
+  const { publicUrl, status, progress, error: uploadError, retry } = usePdfUpload(pdfFile)
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     setError(null)
     setQrDataUrl(null)
-    setPublicUrl(null)
 
     if (!file) {
       setPdfFile(null)
+      setPreviewUrl(null)
       return
     }
 
     if (file.type !== 'application/pdf') {
       setError('Solo se permiten archivos PDF.')
       setPdfFile(null)
+      setPreviewUrl(null)
       event.target.value = ''
       return
     }
 
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl)
+    }
+
     setPdfFile(file)
+    setPreviewUrl(URL.createObjectURL(file))
   }
 
   const handleGenerateQr = async () => {
-    if (!pdfFile) return
+    if (!pdfFile || !publicUrl) return
 
-    if (!isSupabaseConfigured) {
-      setError(
-        'Configura Supabase en un archivo .env para obtener una URL pública. Revisa el README.',
-      )
-      return
-    }
-
-    setIsGenerating(true)
+    setIsGeneratingQr(true)
     setError(null)
-    setQrDataUrl(null)
-    setPublicUrl(null)
 
     try {
-      const uploadedUrl = await uploadPdf(pdfFile)
-      setPublicUrl(uploadedUrl)
-
-      const dataUrl = await QRCode.toDataURL(uploadedUrl, {
+      const dataUrl = await QRCode.toDataURL(publicUrl, {
         width: 320,
         margin: 2,
+        errorCorrectionLevel: 'M',
         color: {
           dark: '#0f172a',
           light: '#ffffff',
         },
       })
       setQrDataUrl(dataUrl)
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : 'No se pudo generar el código QR.'
-      setError(message)
+    } catch {
+      setError('No se pudo generar el código QR.')
     } finally {
-      setIsGenerating(false)
+      setIsGeneratingQr(false)
     }
   }
 
@@ -99,14 +81,22 @@ function App() {
   }
 
   const handleReset = () => {
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl)
+    }
     setPdfFile(null)
-    setPublicUrl(null)
+    setPreviewUrl(null)
     setQrDataUrl(null)
     setError(null)
     if (fileInputRef.current) {
       fileInputRef.current.value = ''
     }
   }
+
+  const displayError = error ?? uploadError
+  const isUploading = status === 'uploading'
+  const isReady = status === 'ready' && Boolean(publicUrl)
+  const fileSizeMb = pdfFile ? (pdfFile.size / (1024 * 1024)).toFixed(2) : null
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -123,9 +113,9 @@ function App() {
 
         {!isSupabaseConfigured && (
           <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-            Falta configurar Supabase. Copia <code className="font-mono">.env.example</code> a{' '}
-            <code className="font-mono">.env</code> y agrega tus credenciales. Sin esto, el QR no
-            funcionará en otros dispositivos.
+            Falta configurar Supabase. Agrega <code className="font-mono">VITE_SUPABASE_URL</code>{' '}
+            y <code className="font-mono">VITE_SUPABASE_ANON_KEY</code> en tu archivo{' '}
+            <code className="font-mono">.env</code>.
           </div>
         )}
 
@@ -162,42 +152,62 @@ function App() {
 
             {pdfFile && (
               <p className="mt-3 text-sm text-slate-600">
-                Archivo: <span className="font-medium text-slate-800">{pdfFile.name}</span>
+                Archivo:{' '}
+                <span className="font-medium text-slate-800">
+                  {pdfFile.name} ({fileSizeMb} MB)
+                </span>
               </p>
             )}
 
-            {error && (
-              <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>
+            {pdfFile && isSupabaseConfigured && (
+              <UploadProgress
+                progress={progress}
+                status={status === 'error' ? 'error' : isReady ? 'ready' : 'uploading'}
+              />
+            )}
+
+            {status === 'error' && uploadError && (
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p>
+                <button
+                  type="button"
+                  onClick={retry}
+                  className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+                >
+                  Reintentar subida
+                </button>
+              </div>
+            )}
+
+            {displayError && status !== 'error' && (
+              <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">
+                {displayError}
+              </p>
             )}
           </section>
 
           {previewUrl && pdfFile && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-800">2. Vista previa del PDF</h2>
-              <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-slate-100">
-                <iframe
-                  src={previewUrl}
-                  title={`Vista previa de ${pdfFile.name}`}
-                  className="h-96 w-full"
-                />
-              </div>
-            </section>
+            <PdfPreview previewUrl={previewUrl} fileName={pdfFile.name} />
           )}
 
           {pdfFile && (
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-800">3. Publicar y generar QR</h2>
+              <h2 className="text-lg font-semibold text-slate-800">3. Generar código QR</h2>
               <p className="mt-2 text-sm text-slate-600">
-                El PDF se sube a Supabase Storage y se obtiene una URL pública permanente para
-                imprimir el QR.
+                El PDF se sube automáticamente al seleccionarlo. Cuando termine, genera el QR al
+                instante.
               </p>
               <button
                 type="button"
                 onClick={handleGenerateQr}
-                disabled={isGenerating}
+                disabled={!isReady || isGeneratingQr || isUploading}
                 className="mt-4 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isGenerating ? 'Subiendo y generando...' : 'Generar QR'}
+                {isUploading
+                  ? `Esperando subida (${progress}%)...`
+                  : isGeneratingQr
+                    ? 'Generando QR...'
+                    : 'Generar QR'}
               </button>
             </section>
           )}
