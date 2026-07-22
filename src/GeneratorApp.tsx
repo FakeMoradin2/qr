@@ -1,28 +1,22 @@
 import { useRef, useState } from 'react'
-import QRCode from 'qrcode'
 import { ImagePreview } from './components/ImagePreview'
 import { PdfPreview } from './components/PdfPreview'
+import { QrCustomizer } from './components/QrCustomizer'
 import { UploadProgress } from './components/UploadProgress'
 import { useImageUpload } from './hooks/useImageUpload'
 import { usePdfUpload } from './hooks/usePdfUpload'
 import { isAcceptedImageFile } from './lib/imageFile'
 import { isLargePdf } from './lib/optimizePdf'
+import {
+  areQrCustomizationsEqual,
+  DEFAULT_QR_CUSTOMIZATION,
+  generateQrDataUrl,
+  type QrCustomization,
+} from './lib/qrOptions'
 import { isSupabaseConfigured } from './lib/supabase'
 import { buildImageViewerUrl, buildViewerUrl, normalizeLinkUrl } from './lib/viewerUrl'
 
 type GeneratorMode = 'link' | 'image' | 'pdf'
-
-async function generateQrDataUrl(targetUrl: string): Promise<string> {
-  return QRCode.toDataURL(targetUrl, {
-    width: 320,
-    margin: 2,
-    errorCorrectionLevel: 'M',
-    color: {
-      dark: '#0f172a',
-      light: '#ffffff',
-    },
-  })
-}
 
 export function GeneratorApp() {
   const [mode, setMode] = useState<GeneratorMode>('link')
@@ -32,6 +26,10 @@ export function GeneratorApp() {
   const [linkInput, setLinkInput] = useState('')
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
   const [viewerUrl, setViewerUrl] = useState<string | null>(null)
+  const [qrCustomization, setQrCustomization] = useState<QrCustomization>(DEFAULT_QR_CUSTOMIZATION)
+  const [appliedCustomization, setAppliedCustomization] = useState<QrCustomization>(
+    DEFAULT_QR_CUSTOMIZATION,
+  )
   const [isGeneratingQr, setIsGeneratingQr] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pdfInputRef = useRef<HTMLInputElement>(null)
@@ -128,37 +126,15 @@ export function GeneratorApp() {
   const handleGeneratePdfQr = async () => {
     if (!pdfFile || !publicUrl) return
 
-    setIsGeneratingQr(true)
-    setError(null)
-
     const qrTargetUrl = buildViewerUrl(publicUrl)
-    setViewerUrl(qrTargetUrl)
-
-    try {
-      setQrDataUrl(await generateQrDataUrl(qrTargetUrl))
-    } catch {
-      setError('No se pudo generar el código QR.')
-    } finally {
-      setIsGeneratingQr(false)
-    }
+    await generateQrForTarget(qrTargetUrl)
   }
 
   const handleGenerateImageQr = async () => {
     if (!imageFile || !publicUrl) return
 
-    setIsGeneratingQr(true)
-    setError(null)
-
     const qrTargetUrl = buildImageViewerUrl(publicUrl)
-    setViewerUrl(qrTargetUrl)
-
-    try {
-      setQrDataUrl(await generateQrDataUrl(qrTargetUrl))
-    } catch {
-      setError('No se pudo generar el código QR.')
-    } finally {
-      setIsGeneratingQr(false)
-    }
+    await generateQrForTarget(qrTargetUrl)
   }
 
   const handleGenerateLinkQr = async () => {
@@ -168,17 +144,28 @@ export function GeneratorApp() {
       return
     }
 
+    await generateQrForTarget(normalizedUrl)
+  }
+
+  const generateQrForTarget = async (targetUrl: string) => {
     setIsGeneratingQr(true)
     setError(null)
-    setViewerUrl(normalizedUrl)
+    setViewerUrl(targetUrl)
 
     try {
-      setQrDataUrl(await generateQrDataUrl(normalizedUrl))
+      const dataUrl = await generateQrDataUrl(targetUrl, qrCustomization)
+      setQrDataUrl(dataUrl)
+      setAppliedCustomization({ ...qrCustomization })
     } catch {
       setError('No se pudo generar el código QR.')
     } finally {
       setIsGeneratingQr(false)
     }
+  }
+
+  const handleApplyCustomization = async () => {
+    if (!viewerUrl) return
+    await generateQrForTarget(viewerUrl)
   }
 
   const handleDownloadQr = () => {
@@ -216,6 +203,8 @@ export function GeneratorApp() {
     setLinkInput('')
     setQrDataUrl(null)
     setViewerUrl(null)
+    setQrCustomization(DEFAULT_QR_CUSTOMIZATION)
+    setAppliedCustomization(DEFAULT_QR_CUSTOMIZATION)
     setError(null)
     if (pdfInputRef.current) pdfInputRef.current.value = ''
     if (imageInputRef.current) imageInputRef.current.value = ''
@@ -233,6 +222,8 @@ export function GeneratorApp() {
         : null
   const showSizeWarning = mode === 'pdf' && pdfFile ? isLargePdf(pdfFile) : false
   const needsSupabase = mode === 'pdf' || mode === 'image'
+  const hasPendingCustomization =
+    Boolean(qrDataUrl) && !areQrCustomizationsEqual(qrCustomization, appliedCustomization)
 
   const qrUrlLabel =
     mode === 'link'
@@ -287,6 +278,24 @@ export function GeneratorApp() {
         )}
 
         <main className="space-y-6">
+          <QrCustomizer value={qrCustomization} onChange={setQrCustomization} />
+
+          {hasPendingCustomization && (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p>Cambiaste el diseño del QR. Aplica los cambios para actualizar la imagen.</p>
+                <button
+                  type="button"
+                  onClick={handleApplyCustomization}
+                  disabled={isGeneratingQr}
+                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isGeneratingQr ? 'Actualizando...' : 'Aplicar diseño'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {mode === 'link' && (
             <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
               <h2 className="text-lg font-semibold text-slate-800">1. Pegar enlace</h2>
@@ -600,11 +609,17 @@ export function GeneratorApp() {
               <h2 className="text-lg font-semibold text-slate-800">{qrStepLabel}</h2>
               <p className="mt-2 text-sm text-slate-600">{qrDescription}</p>
               <div className="mt-4 flex flex-col items-center gap-4">
-                <img
-                  src={qrDataUrl}
-                  alt="Código QR generado"
-                  className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm"
-                />
+                <div
+                  className="rounded-xl border border-slate-200 p-3 shadow-sm"
+                  style={{ backgroundColor: appliedCustomization.backgroundColor }}
+                >
+                  <img
+                    src={qrDataUrl}
+                    alt="Código QR generado"
+                    className="max-w-full"
+                    style={{ width: Math.min(appliedCustomization.size, 320) }}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={handleDownloadQr}
