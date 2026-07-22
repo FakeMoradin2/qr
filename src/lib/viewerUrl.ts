@@ -7,6 +7,21 @@ export function buildViewerUrl(publicPdfUrl: string): string {
   return url.toString()
 }
 
+export function normalizeLinkUrl(input: string): string | null {
+  const trimmed = input.trim()
+  if (!trimmed) return null
+
+  const withProtocol = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`
+
+  try {
+    const url = new URL(withProtocol)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+    return url.toString()
+  } catch {
+    return null
+  }
+}
+
 export function getViewerPdfUrl(): string | null {
   const value = new URLSearchParams(window.location.search).get(PDF_PARAM)
   if (!value) return null
