@@ -1,18 +1,14 @@
-import { useRef, useState } from 'react'
-import { ImagePreview } from './components/ImagePreview'
-import { PdfPreview } from './components/PdfPreview'
-import { QrCustomizer } from './components/QrCustomizer'
-import { UploadProgress } from './components/UploadProgress'
+import { useMemo, useRef, useState } from 'react'
+import { ContentInputSection } from './components/ContentInputSection'
+import { QrCustomizeSection } from './components/QrCustomizeSection'
+import { QrPreviewPanel } from './components/QrPreviewPanel'
+import { StepIndicator } from './components/StepIndicator'
 import { useImageUpload } from './hooks/useImageUpload'
+import { useLiveQrPreview } from './hooks/useLiveQrPreview'
 import { usePdfUpload } from './hooks/usePdfUpload'
 import { isAcceptedImageFile } from './lib/imageFile'
 import { isLargePdf } from './lib/optimizePdf'
-import {
-  areQrCustomizationsEqual,
-  DEFAULT_QR_CUSTOMIZATION,
-  generateQrDataUrl,
-  type QrCustomization,
-} from './lib/qrOptions'
+import { DEFAULT_QR_CUSTOMIZATION, type QrCustomization } from './lib/qrOptions'
 import { isSupabaseConfigured } from './lib/supabase'
 import { buildImageViewerUrl, buildViewerUrl, normalizeLinkUrl } from './lib/viewerUrl'
 
@@ -24,13 +20,7 @@ export function GeneratorApp() {
   const [imageFile, setImageFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [linkInput, setLinkInput] = useState('')
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
-  const [viewerUrl, setViewerUrl] = useState<string | null>(null)
   const [qrCustomization, setQrCustomization] = useState<QrCustomization>(DEFAULT_QR_CUSTOMIZATION)
-  const [appliedCustomization, setAppliedCustomization] = useState<QrCustomization>(
-    DEFAULT_QR_CUSTOMIZATION,
-  )
-  const [isGeneratingQr, setIsGeneratingQr] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const pdfInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -44,6 +34,20 @@ export function GeneratorApp() {
   const progress = uploadState?.progress ?? 0
   const uploadError = uploadState?.error ?? null
   const retry = uploadState?.retry
+
+  const isUploadReady = status === 'ready' && Boolean(publicUrl)
+
+  const qrTargetUrl = useMemo(() => {
+    if (mode === 'link') return normalizeLinkUrl(linkInput)
+    if (mode === 'image' && isUploadReady && publicUrl) return buildImageViewerUrl(publicUrl)
+    if (mode === 'pdf' && isUploadReady && publicUrl) return buildViewerUrl(publicUrl)
+    return null
+  }, [mode, linkInput, isUploadReady, publicUrl])
+
+  const { previewDataUrl, isGenerating, error: previewError, isPlaceholder } = useLiveQrPreview(
+    qrTargetUrl,
+    qrCustomization,
+  )
 
   const clearPreviewUrl = () => {
     if (previewUrl) {
@@ -59,8 +63,6 @@ export function GeneratorApp() {
     setImageFile(null)
     setPreviewUrl(null)
     setLinkInput('')
-    setQrDataUrl(null)
-    setViewerUrl(null)
     setError(null)
     if (pdfInputRef.current) pdfInputRef.current.value = ''
     if (imageInputRef.current) imageInputRef.current.value = ''
@@ -69,8 +71,6 @@ export function GeneratorApp() {
   const handlePdfChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     setError(null)
-    setQrDataUrl(null)
-    setViewerUrl(null)
 
     if (!file) {
       setPdfFile(null)
@@ -94,8 +94,6 @@ export function GeneratorApp() {
   const handleImageChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     setError(null)
-    setQrDataUrl(null)
-    setViewerUrl(null)
 
     if (!file) {
       setImageFile(null)
@@ -116,69 +114,17 @@ export function GeneratorApp() {
     setPreviewUrl(URL.createObjectURL(file))
   }
 
-  const handleLinkChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setLinkInput(event.target.value)
-    setError(null)
-    setQrDataUrl(null)
-    setViewerUrl(null)
-  }
-
-  const handleGeneratePdfQr = async () => {
-    if (!pdfFile || !publicUrl) return
-
-    const qrTargetUrl = buildViewerUrl(publicUrl)
-    await generateQrForTarget(qrTargetUrl)
-  }
-
-  const handleGenerateImageQr = async () => {
-    if (!imageFile || !publicUrl) return
-
-    const qrTargetUrl = buildImageViewerUrl(publicUrl)
-    await generateQrForTarget(qrTargetUrl)
-  }
-
-  const handleGenerateLinkQr = async () => {
-    const normalizedUrl = normalizeLinkUrl(linkInput)
-    if (!normalizedUrl) {
-      setError('Ingresa un enlace válido (por ejemplo: https://ejemplo.com).')
-      return
-    }
-
-    await generateQrForTarget(normalizedUrl)
-  }
-
-  const generateQrForTarget = async (targetUrl: string) => {
-    setIsGeneratingQr(true)
-    setError(null)
-    setViewerUrl(targetUrl)
-
-    try {
-      const dataUrl = await generateQrDataUrl(targetUrl, qrCustomization)
-      setQrDataUrl(dataUrl)
-      setAppliedCustomization({ ...qrCustomization })
-    } catch {
-      setError('No se pudo generar el código QR.')
-    } finally {
-      setIsGeneratingQr(false)
-    }
-  }
-
-  const handleApplyCustomization = async () => {
-    if (!viewerUrl) return
-    await generateQrForTarget(viewerUrl)
-  }
-
   const handleDownloadQr = () => {
-    if (!qrDataUrl) return
+    if (!previewDataUrl || isPlaceholder) return
 
     let filename = 'qr-enlace.png'
     if (mode === 'pdf' && pdfFile) {
       filename = `qr-${pdfFile.name.replace(/\.pdf$/i, '')}.png`
     } else if (mode === 'image' && imageFile) {
       filename = `qr-${imageFile.name.replace(/\.[^.]+$/, '')}.png`
-    } else if (viewerUrl) {
+    } else if (qrTargetUrl) {
       try {
-        const { hostname } = new URL(viewerUrl)
+        const { hostname } = new URL(qrTargetUrl)
         filename = `qr-${hostname}.png`
       } catch {
         filename = 'qr-enlace.png'
@@ -186,7 +132,7 @@ export function GeneratorApp() {
     }
 
     const link = document.createElement('a')
-    link.href = qrDataUrl
+    link.href = previewDataUrl
     link.download = filename
     link.click()
   }
@@ -201,18 +147,13 @@ export function GeneratorApp() {
     setImageFile(null)
     setPreviewUrl(null)
     setLinkInput('')
-    setQrDataUrl(null)
-    setViewerUrl(null)
     setQrCustomization(DEFAULT_QR_CUSTOMIZATION)
-    setAppliedCustomization(DEFAULT_QR_CUSTOMIZATION)
     setError(null)
     if (pdfInputRef.current) pdfInputRef.current.value = ''
     if (imageInputRef.current) imageInputRef.current.value = ''
   }
 
   const displayError = error ?? (mode === 'link' ? null : uploadError)
-  const isUploading = status === 'uploading'
-  const isUploadReady = status === 'ready' && Boolean(publicUrl)
   const isLinkReady = normalizeLinkUrl(linkInput) !== null
   const fileSizeMb =
     mode === 'pdf' && pdfFile
@@ -222,52 +163,23 @@ export function GeneratorApp() {
         : null
   const showSizeWarning = mode === 'pdf' && pdfFile ? isLargePdf(pdfFile) : false
   const needsSupabase = mode === 'pdf' || mode === 'image'
-  const hasPendingCustomization =
-    Boolean(qrDataUrl) && !areQrCustomizationsEqual(qrCustomization, appliedCustomization)
 
-  const qrUrlLabel =
-    mode === 'link'
-      ? 'URL del enlace (QR)'
-      : mode === 'image'
-        ? 'URL del visor de imagen (QR)'
-        : 'URL del visor (QR)'
+  const contentReady =
+    mode === 'link' ? isLinkReady : mode === 'image' ? isUploadReady : isUploadReady
 
-  const qrStepLabel =
-    mode === 'link' ? '2. Código QR generado' : mode === 'image' ? '4. Código QR generado' : '4. Código QR generado'
-
-  const qrDescription =
-    mode === 'link'
-      ? 'Imprime este QR. Al escanearlo se abrirá el enlace indicado.'
-      : mode === 'image'
-        ? 'Imprime este QR. Al escanearlo se abrirá la imagen en un visor optimizado para móvil.'
-        : 'Imprime este QR. Al escanearlo se abre el visor móvil con la primera página al instante.'
+  const currentStep = contentReady ? 3 : 1
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-3xl px-4 py-12">
-        <header className="mb-10 text-center">
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:py-12">
+        <header className="mb-6 text-center sm:mb-8">
           <h1 className="text-3xl font-bold tracking-tight text-slate-900">Generador de QR</h1>
           <p className="mt-2 text-slate-600">
-            Crea un QR desde un enlace, una imagen o un PDF con visor optimizado para móviles.
+            Añade tu contenido, mira el resultado y descarga en segundos.
           </p>
         </header>
 
-        <div className="mb-6 flex justify-center">
-          <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
-            {(['link', 'image', 'pdf'] as const).map((tab) => (
-              <button
-                key={tab}
-                type="button"
-                onClick={() => switchMode(tab)}
-                className={`rounded-md px-4 py-2 text-sm font-medium transition ${
-                  mode === tab ? 'bg-indigo-600 text-white' : 'text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                {tab === 'link' ? 'Enlace' : tab === 'image' ? 'Imagen' : 'PDF'}
-              </button>
-            ))}
-          </div>
-        </div>
+        <StepIndicator currentStep={currentStep} contentReady={contentReady} />
 
         {!isSupabaseConfigured && needsSupabase && (
           <div className="mb-6 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
@@ -277,359 +189,47 @@ export function GeneratorApp() {
           </div>
         )}
 
-        <main className="space-y-6">
-          <QrCustomizer value={qrCustomization} onChange={setQrCustomization} />
+        <main className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-[auto_auto]">
+          <div className="lg:col-start-1 lg:row-start-1">
+            <ContentInputSection
+            mode={mode}
+            onModeChange={switchMode}
+            linkInput={linkInput}
+            onLinkChange={setLinkInput}
+            onPdfChange={handlePdfChange}
+            onImageChange={handleImageChange}
+            onReset={handleReset}
+            pdfInputRef={pdfInputRef}
+            imageInputRef={imageInputRef}
+            pdfFile={pdfFile}
+            imageFile={imageFile}
+            previewUrl={previewUrl}
+            fileSizeMb={fileSizeMb}
+            showSizeWarning={showSizeWarning}
+            displayError={displayError}
+            uploadProgress={progress}
+            uploadStatus={status}
+            isUploadReady={isUploadReady}
+            onRetryUpload={retry}
+            />
+          </div>
 
-          {hasPendingCustomization && (
-            <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p>Cambiaste el diseño del QR. Aplica los cambios para actualizar la imagen.</p>
-                <button
-                  type="button"
-                  onClick={handleApplyCustomization}
-                  disabled={isGeneratingQr}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isGeneratingQr ? 'Actualizando...' : 'Aplicar diseño'}
-                </button>
-              </div>
-            </div>
-          )}
+          <div className="lg:col-start-2 lg:row-start-1 lg:row-span-2">
+            <QrPreviewPanel
+            previewDataUrl={previewDataUrl}
+            customization={qrCustomization}
+            targetUrl={qrTargetUrl}
+            isGenerating={isGenerating}
+            isPlaceholder={isPlaceholder}
+            error={previewError}
+            onDownload={handleDownloadQr}
+            onCopyUrl={handleCopyUrl}
+            />
+          </div>
 
-          {mode === 'link' && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-800">1. Pegar enlace</h2>
-              <p className="mt-2 text-sm text-slate-600">
-                El QR abrirá directamente la página que indiques al escanearlo.
-              </p>
-
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <input
-                  type="url"
-                  value={linkInput}
-                  onChange={handleLinkChange}
-                  placeholder="https://ejemplo.com/pagina"
-                  className="min-w-0 flex-1 rounded-lg border border-slate-300 px-4 py-2.5 text-sm text-slate-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
-                />
-                {linkInput && (
-                  <button
-                    type="button"
-                    onClick={handleReset}
-                    className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                  >
-                    Limpiar
-                  </button>
-                )}
-              </div>
-
-              {displayError && (
-                <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{displayError}</p>
-              )}
-
-              <button
-                type="button"
-                onClick={handleGenerateLinkQr}
-                disabled={!isLinkReady || isGeneratingQr}
-                className="mt-4 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isGeneratingQr ? 'Generando QR...' : 'Generar QR'}
-              </button>
-            </section>
-          )}
-
-          {mode === 'image' && (
-            <>
-              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-800">1. Seleccionar imagen</h2>
-                <p className="mt-2 text-sm text-slate-600">
-                  Formatos admitidos: JPG, PNG, WebP y GIF.
-                </p>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <input
-                    ref={imageInputRef}
-                    id="image-input"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,image/gif,.jpg,.jpeg,.png,.webp,.gif"
-                    onChange={handleImageChange}
-                    className="hidden"
-                  />
-                  <label
-                    htmlFor="image-input"
-                    className="cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700"
-                  >
-                    Seleccionar imagen
-                  </label>
-
-                  {imageFile && (
-                    <button
-                      type="button"
-                      onClick={handleReset}
-                      className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Limpiar
-                    </button>
-                  )}
-                </div>
-
-                {imageFile && (
-                  <p className="mt-3 text-sm text-slate-600">
-                    Archivo:{' '}
-                    <span className="font-medium text-slate-800">
-                      {imageFile.name} ({fileSizeMb} MB)
-                    </span>
-                  </p>
-                )}
-
-                {imageFile && isSupabaseConfigured && (
-                  <UploadProgress
-                    progress={progress}
-                    status={status === 'error' ? 'error' : isUploadReady ? 'ready' : 'uploading'}
-                  />
-                )}
-
-                {status === 'error' && uploadError && retry && (
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
-                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p>
-                    <button
-                      type="button"
-                      onClick={retry}
-                      className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
-                    >
-                      Reintentar subida
-                    </button>
-                  </div>
-                )}
-
-                {displayError && status !== 'error' && (
-                  <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{displayError}</p>
-                )}
-              </section>
-
-              {previewUrl && imageFile && (
-                <ImagePreview previewUrl={previewUrl} fileName={imageFile.name} />
-              )}
-
-              {imageFile && (
-                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-lg font-semibold text-slate-800">3. Generar código QR</h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    El QR abre un visor optimizado para móvil, en lugar de la imagen directa.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleGenerateImageQr}
-                    disabled={!isUploadReady || isGeneratingQr || isUploading}
-                    className="mt-4 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isUploading
-                      ? `Esperando subida (${progress}%)...`
-                      : isGeneratingQr
-                        ? 'Generando QR...'
-                        : 'Generar QR'}
-                  </button>
-                </section>
-              )}
-
-              {publicUrl && (
-                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-lg font-semibold text-slate-800">URL directa de la imagen</h2>
-                  <p className="mt-2 break-all font-mono text-xs text-slate-600">{publicUrl}</p>
-                  <div className="mt-3 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleCopyUrl(publicUrl)}
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Copiar URL
-                    </button>
-                    <a
-                      href={publicUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Abrir imagen
-                    </a>
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-
-          {mode === 'pdf' && (
-            <>
-              <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <h2 className="text-lg font-semibold text-slate-800">1. Seleccionar PDF</h2>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <input
-                    ref={pdfInputRef}
-                    id="pdf-input"
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={handlePdfChange}
-                    className="hidden"
-                  />
-                  <label
-                    htmlFor="pdf-input"
-                    className="cursor-pointer rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-indigo-700"
-                  >
-                    Seleccionar PDF
-                  </label>
-
-                  {pdfFile && (
-                    <button
-                      type="button"
-                      onClick={handleReset}
-                      className="rounded-lg border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Limpiar
-                    </button>
-                  )}
-                </div>
-
-                {pdfFile && (
-                  <p className="mt-3 text-sm text-slate-600">
-                    Archivo:{' '}
-                    <span className="font-medium text-slate-800">
-                      {pdfFile.name} ({fileSizeMb} MB)
-                    </span>
-                  </p>
-                )}
-
-                {showSizeWarning && (
-                  <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    PDF grande: en móvil puede tardar más. Comprime el archivo antes de subirlo si
-                    supera 2 MB (usa ilovepdf.com o similar).
-                  </p>
-                )}
-
-                {pdfFile && isSupabaseConfigured && (
-                  <UploadProgress
-                    progress={progress}
-                    status={status === 'error' ? 'error' : isUploadReady ? 'ready' : 'uploading'}
-                  />
-                )}
-
-                {status === 'error' && uploadError && retry && (
-                  <div className="mt-3 flex flex-wrap items-center gap-3">
-                    <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{uploadError}</p>
-                    <button
-                      type="button"
-                      onClick={retry}
-                      className="rounded-lg border border-red-200 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
-                    >
-                      Reintentar subida
-                    </button>
-                  </div>
-                )}
-
-                {displayError && status !== 'error' && (
-                  <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{displayError}</p>
-                )}
-              </section>
-
-              {previewUrl && pdfFile && <PdfPreview previewUrl={previewUrl} fileName={pdfFile.name} />}
-
-              {pdfFile && (
-                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-lg font-semibold text-slate-800">3. Generar código QR</h2>
-                  <p className="mt-2 text-sm text-slate-600">
-                    El QR abre un visor optimizado para móvil con carga progresiva, en lugar del PDF
-                    directo.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={handleGeneratePdfQr}
-                    disabled={!isUploadReady || isGeneratingQr || isUploading}
-                    className="mt-4 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {isUploading
-                      ? `Esperando subida (${progress}%)...`
-                      : isGeneratingQr
-                        ? 'Generando QR...'
-                        : 'Generar QR'}
-                  </button>
-                </section>
-              )}
-
-              {publicUrl && (
-                <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                  <h2 className="text-lg font-semibold text-slate-800">URL directa del PDF</h2>
-                  <p className="mt-2 break-all font-mono text-xs text-slate-600">{publicUrl}</p>
-                  <div className="mt-3 flex flex-wrap gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleCopyUrl(publicUrl)}
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Copiar URL
-                    </button>
-                    <a
-                      href={publicUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                    >
-                      Abrir PDF
-                    </a>
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-
-          {viewerUrl && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-800">{qrUrlLabel}</h2>
-              <p className="mt-2 break-all font-mono text-xs text-slate-600">{viewerUrl}</p>
-              <div className="mt-3 flex flex-wrap gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleCopyUrl(viewerUrl)}
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                >
-                  Copiar URL del QR
-                </button>
-                <a
-                  href={viewerUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
-                >
-                  Probar en móvil
-                </a>
-              </div>
-            </section>
-          )}
-
-          {qrDataUrl && (
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-800">{qrStepLabel}</h2>
-              <p className="mt-2 text-sm text-slate-600">{qrDescription}</p>
-              <div className="mt-4 flex flex-col items-center gap-4">
-                <div
-                  className="rounded-xl border border-slate-200 p-3 shadow-sm"
-                  style={{ backgroundColor: appliedCustomization.backgroundColor }}
-                >
-                  <img
-                    src={qrDataUrl}
-                    alt="Código QR generado"
-                    className="max-w-full"
-                    style={{ width: Math.min(appliedCustomization.size, 320) }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={handleDownloadQr}
-                  className="rounded-lg bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition hover:bg-slate-800"
-                >
-                  Descargar QR (PNG)
-                </button>
-              </div>
-            </section>
-          )}
+          <div className="lg:col-start-1 lg:row-start-2">
+            <QrCustomizeSection value={qrCustomization} onChange={setQrCustomization} />
+          </div>
         </main>
       </div>
     </div>

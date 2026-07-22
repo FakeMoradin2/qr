@@ -10,6 +10,7 @@ import {
 type QrCustomizerProps = {
   value: QrCustomization
   onChange: (value: QrCustomization) => void
+  embedded?: boolean
 }
 
 const ERROR_LEVELS: { value: QrErrorCorrectionLevel; label: string; hint: string }[] = [
@@ -19,7 +20,7 @@ const ERROR_LEVELS: { value: QrErrorCorrectionLevel; label: string; hint: string
   { value: 'H', label: 'Máxima', hint: '30% de recuperación' },
 ]
 
-export function QrCustomizer({ value, onChange }: QrCustomizerProps) {
+export function QrCustomizer({ value, onChange, embedded = false }: QrCustomizerProps) {
   const logoInputRef = useRef<HTMLInputElement>(null)
 
   const update = (patch: Partial<QrCustomization>) => {
@@ -58,25 +59,25 @@ export function QrCustomizer({ value, onChange }: QrCustomizerProps) {
     }
   }
 
+  const wrapperClass = embedded
+    ? 'pt-4'
+    : 'rounded-2xl border border-slate-200 bg-white p-6 shadow-sm'
+
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-800">Personalizar QR</h2>
-          <p className="mt-1 text-sm text-slate-600">
-            Colores, tamaño, margen, corrección de errores y logo central.
-          </p>
-        </div>
+    <div className={wrapperClass}>
+      <div className={`flex flex-wrap items-center justify-between gap-3 ${embedded ? '' : ''}`}>
+        {!embedded && <h3 className="text-base font-semibold text-slate-800">Opciones de diseño</h3>}
+        {embedded && <p className="text-sm font-medium text-slate-700">Ajustes avanzados</p>}
         <button
           type="button"
           onClick={handleReset}
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-100"
         >
-          Restablecer
+          Restablecer diseño
         </button>
       </div>
 
-      <div className="mt-6 space-y-6">
+      <div className={`space-y-6 ${embedded ? 'mt-4' : 'mt-6'}`}>
         <div>
           <label className="text-sm font-medium text-slate-700">Tamaño</label>
           <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -254,6 +255,6 @@ export function QrCustomizer({ value, onChange }: QrCustomizerProps) {
           </div>
         </div>
       </div>
-    </section>
+    </div>
   )
 }
