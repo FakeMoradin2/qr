@@ -17,6 +17,14 @@ export type UploadOptions = {
 }
 
 export async function uploadPdf(file: File, options: UploadOptions = {}): Promise<string> {
+  return uploadToStorage(file, options)
+}
+
+export async function uploadImage(file: File, options: UploadOptions = {}): Promise<string> {
+  return uploadToStorage(file, options)
+}
+
+async function uploadToStorage(file: File, options: UploadOptions = {}): Promise<string> {
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
   const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
@@ -46,7 +54,7 @@ function uploadWithProgress(
     xhr.open('POST', url)
     xhr.setRequestHeader('Authorization', `Bearer ${anonKey}`)
     xhr.setRequestHeader('apikey', anonKey)
-    xhr.setRequestHeader('Content-Type', 'application/pdf')
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
     xhr.setRequestHeader('cache-control', `max-age=${CACHE_MAX_AGE}`)
     xhr.setRequestHeader('x-upsert', 'false')
     xhr.setRequestHeader('x-content-disposition', 'inline')
@@ -76,7 +84,7 @@ function uploadWithProgress(
         resolve()
         return
       }
-      let message = `Error ${xhr.status} al subir el PDF`
+      let message = `Error ${xhr.status} al subir el archivo`
       try {
         const body = JSON.parse(xhr.responseText) as { message?: string; error?: string }
         message = body.message ?? body.error ?? message
@@ -88,7 +96,7 @@ function uploadWithProgress(
 
     xhr.addEventListener('error', () => {
       signal?.removeEventListener('abort', abortHandler)
-      reject(new Error('Error de red al subir el PDF.'))
+      reject(new Error('Error de red al subir el archivo.'))
     })
 
     xhr.addEventListener('abort', () => {

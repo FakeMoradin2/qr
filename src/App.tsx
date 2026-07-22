@@ -1,9 +1,13 @@
 import { lazy, Suspense } from 'react'
 import { GeneratorApp } from './GeneratorApp'
-import { getViewerPdfUrl } from './lib/viewerUrl'
+import { getViewerImageUrl, getViewerPdfUrl } from './lib/viewerUrl'
 
 const PdfViewer = lazy(() =>
   import('./components/PdfViewer').then((module) => ({ default: module.PdfViewer })),
+)
+
+const ImageViewer = lazy(() =>
+  import('./components/ImageViewer').then((module) => ({ default: module.ImageViewer })),
 )
 
 function ViewerFallback() {
@@ -19,11 +23,20 @@ function ViewerFallback() {
 
 function App() {
   const pdfUrl = getViewerPdfUrl()
+  const imageUrl = getViewerImageUrl()
 
   if (pdfUrl) {
     return (
       <Suspense fallback={<ViewerFallback />}>
         <PdfViewer pdfUrl={pdfUrl} />
+      </Suspense>
+    )
+  }
+
+  if (imageUrl) {
+    return (
+      <Suspense fallback={<ViewerFallback />}>
+        <ImageViewer imageUrl={imageUrl} />
       </Suspense>
     )
   }
